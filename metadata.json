@@ -1,0 +1,6 @@
+{
+  "name": "Sahayog - MSInS Startup Procurement Platform",
+  "description": "Startup-friendly public procurement mechanism for the Government of Maharashtra (MSInS / SIH 26136) implementing GFR Rule 173(i) & 170 relaxations, milestone contracting, and scale-up pathways.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

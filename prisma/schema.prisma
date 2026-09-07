@@ -1,0 +1,309 @@
+// This is your Prisma schema file for Sahayog - MSInS Public Procurement Platform
+// Covers User, Challenge, Application, Evaluation, Pilot, Milestone, Payment, ValidationRecord, Template, AuditLog
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  DEPARTMENT_OFFICIAL
+  STARTUP
+  EVALUATOR
+  MSINS_ADMIN
+  INDEPENDENT_VALIDATOR
+}
+
+enum ChallengeStatus {
+  DRAFT
+  PUBLISHED
+  APPLICATIONS_OPEN
+  UNDER_EVALUATION
+  PILOT_AWARDED
+  CLOSED
+}
+
+enum DataSensitivity {
+  LOW_PUBLIC
+  MEDIUM_RESTRICTED
+  HIGH_CONFIDENTIAL
+}
+
+enum ApplicationStatus {
+  SUBMITTED
+  ELIGIBILITY_VERIFIED
+  ELIGIBILITY_REJECTED
+  SHORTLISTED
+  SELECTED_FOR_PILOT
+  REJECTED
+}
+
+enum PilotPhase {
+  PHASE_0_FEASIBILITY    // Small fixed grant, sandboxed/dummy data, 4-6 weeks
+  PHASE_1_PILOT          // Milestone-based, bounded live data, 8-12 weeks
+  PHASE_2_SCALE_DECISION // Scale decision & direct procurement under GFR 173
+}
+
+enum PilotStatus {
+  DRAFTING_CONTRACT
+  CONTRACT_SIGNED
+  IN_PROGRESS
+  MILESTONES_REVIEW
+  COMPLETED
+  TERMINATED
+  SCALED
+}
+
+enum MilestoneStatus {
+  PENDING
+  IN_PROGRESS
+  ON_TRACK
+  AT_RISK
+  BREACHED
+  VERIFIED
+  DISBURSED
+}
+
+enum PaymentStatus {
+  SCHEDULED
+  PROCESSING
+  DISBURSED
+  ON_HOLD
+  FAILED
+}
+
+enum ScaleRecommendation {
+  DIRECT_DEPARTMENT_PROCUREMENT  // GFR 173(i) fast-track purchase
+  STATE_WIDE_EXPANSION          // Maharashtra State Innovation adoption
+  GEM_RUNWAY_LISTING            // National GeM listing
+  PIVOT_REQUIRED
+  UNSATISFACTORY
+}
+
+model User {
+  id               String       @id @default(cuid())
+  email            String       @unique
+  name             String
+  role             Role         @default(STARTUP)
+  departmentName   String?      // e.g. "Public Health Department, Maharashtra"
+  designation      String?      // e.g. "Joint Secretary", "Director of Innovation"
+  startupName      String?      // e.g. "AquaSense Technologies Pvt Ltd"
+  dpiitNumber      String?      // e.g. "DIPP89123" for DPIIT startup check
+  dpiitVerified    Boolean      @default(false)
+  gemSellerId      String?      // e.g. "GEM-2025-IN991"
+  phone            String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  // Relationships
+  challengesCreated Challenge[]
+  applications      Application[]
+  evaluations       Evaluation[]
+  validations       ValidationRecord[]
+  auditLogs         AuditLog[]
+
+  @@index([role])
+}
+
+model Challenge {
+  id                  String          @id @default(cuid())
+  title               String
+  code                String          @unique // e.g. "MSINS-2025-HLTH-001"
+  department          String          // Department of Public Health, Water Supply, etc.
+  sector              String          // Healthcare, Agriculture, Urban Tech, Education, Clean Energy
+  problemDescription String          @db.Text
+  baselineMetric      String          // e.g., "72 hours turnaround time for rural diagnostics"
+  targetOutcome       String          // e.g., "Reduce turnaround to < 12 hours with 98% accuracy"
+  budgetCeiling       Float           // In INR (e.g. 2500000)
+  timelineWeeks       Int             // e.g. 12
+  dataSensitivity     DataSensitivity @default(MEDIUM_RESTRICTED)
+  gfrRule173Applied   Boolean         @default(true) // Prior turnover & experience relaxed
+  gfrRule170Applied   Boolean         @default(true) // EMD / Bid security relaxed
+  status              ChallengeStatus @default(PUBLISHED)
+  tags                String[]        // ["IoT", "AI", "Rural Health", "Edge Computing"]
+  minTpiScore         Float?          @default(60.0) // Minimum tech readiness threshold
+  publishedAt         DateTime?       @default(now())
+  applicationDeadline DateTime
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  creatorId           String
+  creator             User            @relation(fields: [creatorId], references: [id])
+  applications        Application[]
+  pilots              Pilot[]
+
+  @@index([department, sector, status])
+}
+
+model Application {
+  id                    String            @id @default(cuid())
+  challengeId           String
+  challenge             Challenge         @relation(fields: [challengeId], references: [id])
+  startupId             String
+  startup               User              @relation(fields: [startupId], references: [id])
+  proposalTitle         String
+  executiveSummary      String            @db.Text
+  technicalSpecs        String            @db.Text
+  teamCapability        String            @db.Text
+  costBreakdown         Float
+  timelineCommitment    Int               // in weeks
+  dpiitCertificate      String?           // Certificate number or URL
+  isDpiitVerified       Boolean           @default(false)
+  gfrTurnoverRelaxed    Boolean           @default(true)
+  gfrEmdRelaxed         Boolean           @default(true)
+  dataSecurityPlan      String?           @db.Text
+  status                ApplicationStatus @default(SUBMITTED)
+  scoreAverage          Float?            @default(0)
+  submittedAt           DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  evaluations           Evaluation[]
+  pilot                 Pilot?
+
+  @@unique([challengeId, startupId])
+}
+
+model Evaluation {
+  id                    String      @id @default(cuid())
+  applicationId         String
+  application           Application @relation(fields: [applicationId], references: [id])
+  evaluatorId           String
+  evaluator             User        @relation(fields: [evaluatorId], references: [id])
+  
+  // Rubric Scoring (0 to 20 each, weighted total out of 100)
+  technicalFeasibility  Float       // 25% weight
+  teamCapability        Float       // 20% weight
+  outcomeAlignment      Float       // 25% weight
+  costEfficiency        Float       // 15% weight
+  dataSecurityReadiness Float       // 15% weight
+  weightedTotal         Float
+  
+  evaluatorType         String      // "DEPARTMENT_OFFICIAL" | "DOMAIN_EXPERT" | "MSINS_REP"
+  isBlind               Boolean     @default(true) // Independent blind scoring until finalized
+  finalized             Boolean     @default(false)
+  qualitativeRemarks    String?     @db.Text
+  evaluatedAt           DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  @@unique([applicationId, evaluatorId])
+}
+
+model Pilot {
+  id                   String          @id @default(cuid())
+  challengeId          String
+  challenge            Challenge       @relation(fields: [challengeId], references: [id])
+  applicationId        String          @unique
+  application          Application     @relation(fields: [applicationId], references: [id])
+  phase                PilotPhase      @default(PHASE_0_FEASIBILITY)
+  status               PilotStatus     @default(DRAFTING_CONTRACT)
+  totalGrantAmount     Float
+  disbursedAmount      Float           @default(0)
+  contractTemplateVer  String          @default("MSINS-PA-V2.1")
+  eSignedByDepartment  Boolean         @default(false)
+  eSignedByStartup     Boolean         @default(false)
+  eSignedAt            DateTime?
+  contractHash         String?
+  startDate            DateTime?
+  endDate              DateTime?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  milestones           Milestone[]
+  validationRecord     ValidationRecord?
+}
+
+model Milestone {
+  id             String          @id @default(cuid())
+  pilotId        String
+  pilot          Pilot           @relation(fields: [pilotId], references: [id])
+  orderIndex     Int
+  title          String
+  description    String          @db.Text
+  baselineMetric String
+  targetMetric   String
+  currentMetric  String?
+  kpiProgressPct Float           @default(0)
+  trancheAmount  Float
+  dueDate        DateTime
+  status         MilestoneStatus @default(PENDING)
+  deliverableUrl String?
+  auditNotes     String?
+  verifiedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  payments       Payment[]
+
+  @@index([pilotId, orderIndex])
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  milestoneId    String
+  milestone      Milestone     @relation(fields: [milestoneId], references: [id])
+  trancheAmount  Float
+  pfmsRefNumber  String        @unique // PFMS/Treasury reference
+  bankAccount    String
+  ifscCode       String
+  status         PaymentStatus @default(SCHEDULED)
+  initiatedAt    DateTime      @default(now())
+  disbursedAt    DateTime?
+  treasurySlipUrl String?
+  failureReason  String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+model ValidationRecord {
+  id                   String              @id @default(cuid())
+  pilotId              String              @unique
+  pilot                Pilot               @relation(fields: [pilotId], references: [id])
+  validatorId          String
+  validator            User                @relation(fields: [validatorId], references: [id])
+  outcomeCertified     Boolean             @default(false)
+  actualMetricAchieved String
+  baselineVerified     String
+  targetVerified       String
+  certificationNumber  String              @unique // e.g. "MSINS-CERT-2025-089"
+  certificateHash      String              // SHA-256 digital fingerprint
+  scaleRecommendation  ScaleRecommendation @default(DIRECT_DEPARTMENT_PROCUREMENT)
+  justificationNotes   String              @db.Text
+  gemCatalogReady      Boolean             @default(true)
+  issuedAt             DateTime            @default(now())
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+}
+
+model Template {
+  id             String   @id @default(cuid())
+  code           String   @unique // e.g. "TPL-GFR173-RFP-V1"
+  category       String   // "PROBLEM_STATEMENT" | "EVALUATION_RUBRIC" | "PILOT_AGREEMENT" | "DATA_IP_CLAUSE" | "CYBERSECURITY_CHECKLIST" | "RISK_EXIT_CLAUSE" | "PROCUREMENT_TRANSITION"
+  title          String
+  version        String   // "v2.1"
+  description    String
+  legalReference String   // e.g. "GFR 2017 Rule 173(i) & MSInS Policy 2025"
+  contentSnippet String   @db.Text
+  downloadFormat String   @default("DOCX, PDF")
+  updatedAt      DateTime @updatedAt
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  action       String   // e.g. "GFR_173_EXEMPTION_APPLIED", "BLIND_EVALUATION_SUBMITTED", "MILESTONE_PAYMENT_DISBURSED"
+  entityType   String   // "Challenge" | "Application" | "Evaluation" | "Contract" | "Payment" | "Validation"
+  entityId     String
+  actorId      String?
+  actor        User?    @relation(fields: [actorId], references: [id])
+  actorRole    Role?
+  policyBasis  String?  // e.g. "GFR 2017 Rule 173(i)", "GFR 2017 Rule 170"
+  hashProof    String   // SHA-256 audit fingerprint
+  detailsJson  String   @db.Text
+  timestamp    DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([timestamp])
+}
